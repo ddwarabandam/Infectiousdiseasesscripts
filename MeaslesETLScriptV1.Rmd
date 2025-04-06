@@ -1,0 +1,689 @@
+---
+title: "Measles Investigation: ETL & Descriptive Analysis"
+output: html_document
+params:
+  group_var:
+    value: "None"
+    choices:
+      - "None"
+      - "sex_at_birth"
+      - "race"
+      - "hispanic_latino"
+      - "age_group"
+---
+
+```{r setup, include=FALSE}
+# Minimal package loading
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(plotly)
+library(EpiEstim)
+library(incidence)
+library(projections)
+library(distcrete)
+library(epitrix)
+library(tidyr)
+library(knitr)
+library(readxl)
+
+# For neat display
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+
+```{r ETL script, echo=FALSE, message=FALSE, warning=FALSE, results='asis'}
+# ----------------------------------------------------------------------------
+# (1) Generate random "measles_data" to mimic your form fields
+# ----------------------------------------------------------------------------
+
+#measles_data <- read_xlsx("C:/Users/aksha/Downloads/COPH/APEX/Tech Start Up-Datta Data LLC/measlesapp/data/Measles_Cases_2025-04-03.xlsx")
+  
+  #data.frame(
+  #case_id               = paste0("C", 1:n_demo),
+ # patient_name          = paste("Patient", 1:n_demo),
+ # age                   = sample(c(1:90, NA), n_demo, replace = TRUE),
+ # onset_date            = sample(seq(as.Date("2025-03-01"), 
+ #                                    as.Date("2025-04-01"), by="day"), 
+ #                                n_demo, replace = TRUE),
+ # vacc_status           = sample(c("Yes", "No", "", NA), n_demo, replace = TRUE),
+  # Example fields from the form:
+  #state_case_id         = sample(c("S001","S002",""), n_demo, replace=TRUE),
+ # lab_id                = sample(c("L001","L002",""), n_demo, replace=TRUE),
+ # nndss_id              = sample(c("N001","N002",""), n_demo, replace=TRUE),
+ # rash_onset_date       = sample(seq(as.Date("2025-03-10"), as.Date("2025-04-10"), by="day"), 
+#                                 n_demo, replace=TRUE),
+  #fever_onset_date      = sample(seq(as.Date("2025-03-05"), as.Date("2025-03-25"), by="day"), 
+ #                                n_demo, replace=TRUE),
+  # Just a few more examples – in practice, fill out all fields you need
+ # outbreak_related      = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+ # recent_travel         = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  # We'll have a few custom columns for demonstration
+  # for R(t) analysis we need daily counts by onset_date
+  # We'll unify on onset_date
+ # stringsAsFactors = FALSE
+#)
+
+set.seed(123)
+n_demo <- 50
+measles_data <- data.frame(
+  case_id               = paste0("C", 1:n_demo),
+  patient_name          = paste("Patient", 1:n_demo),
+  age                   = sample(c(1:90, NA), n_demo, replace = TRUE),
+  onset_date            = sample(seq(as.Date("2025-03-01"), 
+                                     as.Date("2025-04-01"), by="day"), 
+                                 n_demo, replace = TRUE),
+  vacc_status           = sample(c("One dose", "Two dose", "Unvaccinated", "Unknown" ,"", NA), n_demo, replace = TRUE),
+  state_case_id         = sample(c("S001","S002",""), n_demo, replace=TRUE),
+  lab_id                = sample(c("L001","L002",""), n_demo, replace=TRUE),
+  nedss_id              = sample(c("N001","N002",""), n_demo, replace=TRUE),
+  report_date_hd        = sample(seq(as.Date("2025-03-10"), as.Date("2025-03-20"), by="day"), 
+                                 n_demo, replace = TRUE),
+  invest_start_date     = sample(seq(as.Date("2025-03-10"), as.Date("2025-03-20"), by="day"), 
+                                 n_demo, replace = TRUE),
+  db_entry_date         = sample(seq(as.Date("2025-03-11"), as.Date("2025-03-21"), by="day"), 
+                                 n_demo, replace = TRUE),
+  interviewer_name      = sample(c("John Doe","Jane Smith",""), n_demo, replace=TRUE),
+  interviewer_contact   = sample(c("555-1234","555-5678","NA"), n_demo, replace=TRUE),
+  call_log             = rep("Example call log data", n_demo),
+  working_status       = rep("Example working status data", n_demo),
+  final_status         = sample(c("Confirmed","Probable", "Suspect", "Unknown", "Ruled-out"), 
+                                n_demo, replace=TRUE),
+  outbreak_related     = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  outbreak_name        = sample(c("OutbreakX","OutbreakY",""), n_demo, replace=TRUE),
+  import_status        = sample(c("International importation","U.S. acquired",""), 
+                                n_demo, replace=TRUE),
+  us_acquired_detail   = sample(c("Import-linked case","Endemic case","Unknown source case",""), 
+                                n_demo, replace=TRUE),
+  respondent_name      = sample(c("Family1","Family2",""), n_demo, replace=TRUE),
+  respondent_relation  = sample(c("Parent","Sibling","Self",""), n_demo, replace=TRUE),
+  address              = rep("123 Main St", n_demo),
+  city                 = sample(c("Hastings","Lincoln","Unknown",""), n_demo, replace=TRUE),
+  county               = sample(c("Adams","Hall","Lancaster","Unknown",""), n_demo, replace=TRUE),
+  state                = sample(c("NE","KS","Unknown",""), n_demo, replace=TRUE),
+  zip                  = sample(c("68901","68801","NA",""), n_demo, replace=TRUE),
+  telephone            = sample(c("555-0001","555-0002","NA",""), n_demo, replace=TRUE),
+  residence_country    = sample(c("USA","Mexico","Unknown",""), n_demo, replace=TRUE),
+  sex_at_birth         = sample(c("Male","Female","Unknown",""), n_demo, replace=TRUE),
+  dob                  = sample(seq(as.Date("1930-01-01"), as.Date("2020-01-01"), by="day"), 
+                                n_demo, replace=TRUE),
+  hispanic_latino      = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  race                 = sample(c("White","Black/African American","Asian/Pacific Islander",
+                                  "American Indian/Alaska Native","Other","Unknown",""), 
+                                n_demo, replace=TRUE),
+  symptom_rash         = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  rash_onset_date      = sample(seq(as.Date("2025-03-10"), as.Date("2025-04-10"), by="day"), 
+                                n_demo, replace=TRUE),
+  rash_generalized     = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  rash_desc            = sample(c("Maculopapular","Some description",""), n_demo, replace=TRUE),
+  rash_current         = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  rash_duration_days   = sample(c(3,4,5,NA), n_demo, replace=TRUE),
+  symptom_fever        = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  fever_onset_date     = sample(seq(as.Date("2025-03-01"), as.Date("2025-03-15"), by="day"), 
+                                n_demo, replace=TRUE),
+  max_temp             = sample(c(99.5, 100.1, 102.2, NA), n_demo, replace=TRUE),
+  temp_scale           = sample(c("°F","°C",""), n_demo, replace=TRUE),
+  symptom_cough        = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  symptom_coryza       = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  symptom_conjunctivitis = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  symptom_otitis       = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  symptom_pneumonia    = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  symptom_diarrhea     = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  symptom_vomiting     = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  symptom_dehydration  = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  symptom_low_platelets = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  symptom_encephalitis = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  symptom_other        = rep("None reported", n_demo),
+  healthcare_visited   = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  healthcare_location  = sample(c("Clinic","ER","Unknown",""), n_demo, replace=TRUE),
+  healthcare_visit_date = sample(seq(as.Date("2025-03-05"), as.Date("2025-03-25"), by="day"), 
+                                 n_demo, replace=TRUE),
+  healthcare_facility  = sample(c("FacilityA","FacilityB",""), n_demo, replace=TRUE),
+  hospitalized         = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  hospital_name        = sample(c("HospitalX","HospitalY",""), n_demo, replace=TRUE),
+  hospital_admit_date  = sample(seq(as.Date("2025-03-15"), as.Date("2025-03-25"), by="day"), 
+                                n_demo, replace=TRUE),
+  hospital_discharge_date = sample(seq(as.Date("2025-03-16"), as.Date("2025-03-30"), by="day"), 
+                                   n_demo, replace=TRUE),
+  patient_death        = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  death_date           = rep(NA, n_demo),
+  pregnancy_status     = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  immune_weakened      = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  immune_conditions    = rep("None known", n_demo),
+  recent_travel        = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  travel_depart_date   = sample(seq(as.Date("2025-02-01"), as.Date("2025-02-28"), by="day"), 
+                                n_demo, replace=TRUE),
+  countries_visited    = sample(c("Mexico","Canada","Unknown",""), n_demo, replace=TRUE),
+  travel_return_date   = sample(seq(as.Date("2025-02-15"), as.Date("2025-03-01"), by="day"), 
+                                n_demo, replace=TRUE),
+  known_contact        = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  contact_location_type= sample(c("School","Work","Healthcare","Unknown",""), n_demo, replace=TRUE),
+  contact_location_name= sample(c("ABC School","XYZ Company",""), n_demo, replace=TRUE),
+  contact_dates        = rep("03/05/2025 - 03/07/2025", n_demo),
+  contact_details      = rep("Details here", n_demo),
+  source_case_id       = sample(c("C2","C3","Unknown",""), n_demo, replace=TRUE),
+  exposure_period_table  = rep("Example exposure data", n_demo),
+  infectious_period_table= rep("Example infectious data", n_demo),
+  household_contacts_table= rep("John Smith, father, MMR:2 doses", n_demo),
+  vaccine_received       = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  vaccine_doses_num      = sample(c(0,1,2,NA), n_demo, replace=TRUE),
+  vaccine_dose1_date     = rep(NA, n_demo),
+  vaccine_dose2_date     = rep(NA, n_demo),
+  vaccine_dose3_date     = rep(NA, n_demo),
+  pep_received           = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  pep_type               = sample(c("Vaccine","Immunoglobulin (IG)","Unknown",""), 
+                                  n_demo, replace=TRUE),
+  pep_date               = rep(NA, n_demo),
+  pep_within_timeframe   = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  ig_admin_method        = sample(c("Intramuscular","Intravenous","Unknown",""), n_demo, replace=TRUE),
+  testing_performed      = sample(c("Yes","No","Unknown",""), n_demo, replace=TRUE),
+  specimen_permission    = sample(c("Yes","No",""), n_demo, replace=TRUE),
+  test_pcr_result        = sample(c("Pos","Neg","Indet","Pend",""), n_demo, replace=TRUE),
+  test_pcr_date          = rep(NA, n_demo),
+  test_pcr_lab           = sample(c("LabA","LabB",""), n_demo, replace=TRUE),
+  test_igm_result        = sample(c("Pos","Neg","Indet","Pend",""), n_demo, replace=TRUE),
+  test_igm_date          = rep(NA, n_demo),
+  test_igm_lab           = sample(c("LabA","LabB",""), n_demo, replace=TRUE),
+  test_igg_acute_result  = sample(c("Pos","Neg","Indet","Pend",""), n_demo, replace=TRUE),
+  test_igg_acute_date    = rep(NA, n_demo),
+  test_igg_acute_lab     = sample(c("LabA","LabB",""), n_demo, replace=TRUE),
+  test_igg_conval_result = sample(c("Pos","Neg","Indet","Pend",""), n_demo, replace=TRUE),
+  test_igg_conval_date   = rep(NA, n_demo),
+  test_igg_conval_lab    = sample(c("LabA","LabB",""), n_demo, replace=TRUE),
+  test_genotype_result   = sample(c("Pos","Neg","Indet","Pend",""), n_demo, replace=TRUE),
+  test_genotype_date     = rep(NA, n_demo),
+  test_genotype_lab      = sample(c("LabA","LabB",""), n_demo, replace=TRUE),
+  test_meva_result       = sample(c("Pos","Neg","Indet","Pend",""), n_demo, replace=TRUE),
+  test_meva_date         = rep(NA, n_demo),
+  test_meva_lab          = sample(c("LabA","LabB",""), n_demo, replace=TRUE),
+  stringsAsFactors = FALSE
+)
+
+
+# ----------------------------------------------------------------------------
+# (2) Basic ETL
+# - Convert blanks to 'Unknown'
+# - Coerce numeric columns to numeric
+# - Coerce date columns to Date
+# ----------------------------------------------------------------------------
+
+# 2.1 Convert blank ("") or NA to "Unknown" in character columns
+char_cols <- names(measles_data)[sapply(measles_data, is.character)]
+measles_data <- measles_data %>%
+  mutate(across(all_of(char_cols),
+                ~ if_else(. == "" | is.na(.), "Unknown", .)))
+
+# 2.2 Numeric columns
+#    Suppose 'age' is numeric, so let's ensure it
+measles_data <- measles_data %>%
+  mutate(
+    age = suppressWarnings(as.numeric(age))
+  )
+
+# 2.3 Date columns
+date_vars <- c("onset_date","rash_onset_date","fever_onset_date")
+for(dv in date_vars) {
+  if(dv %in% names(measles_data)){
+    measles_data[[dv]] <- suppressWarnings(as.Date(measles_data[[dv]]))
+  }
+}
+
+
+# Create age_group from age
+measles_data <- measles_data %>%
+  mutate(age_group = cut(
+    age,
+    breaks = c(0, 5, 9, 14, 19, 64, Inf),
+    labels = c("0-5", "6-9", "10-14", "15-19", "20-64", "65+"),
+    include.lowest = TRUE,
+    right = TRUE
+  ))
+
+# You can do more as needed for your form fields (e.g. hospital_admit_date, discharge_date).
+
+vax_age_table <- table(measles_data$vacc_status, measles_data$age_group)
+
+
+##############################
+# Summary Statistics in Table
+##############################
+
+# 1) Define columns to summarize
+summary_cols <- c("vacc_status", "final_status", 
+  "sex_at_birth", "age_group", "race", "hispanic", 
+  "city", "county", "state", "country", 
+  "outbreak_related", "recent_travel"
+)
+
+# 2) Create an empty data frame to store freq results
+summary_freq_df <- data.frame(
+  Variable = character(),
+  Category = character(),
+  Count    = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# 3) Loop through each column, build frequency table, convert to a tidy data frame
+for(col_name in summary_cols) {
+  # Skip if column doesn't exist
+  if(!col_name %in% names(measles_data)) next
+  
+  freq_tbl <- table(measles_data[[col_name]], useNA = "ifany")
+  # freq_tbl is a named vector of counts
+  
+  # Convert to data frame
+  freq_df <- data.frame(
+    Category = names(freq_tbl),
+    Count    = as.numeric(freq_tbl),
+    stringsAsFactors = FALSE
+  )
+  freq_df$Variable <- col_name  # label the variable name
+  
+  # Bind into the master
+  summary_freq_df <- rbind(summary_freq_df, freq_df[, c("Variable","Category","Count")])
+}
+
+# 4) Use kable + kableExtra for a minimal, nice HTML table
+library(knitr)
+library(kableExtra)
+
+if(nrow(summary_freq_df) == 0) {
+  cat("No summary columns found in the dataset.\n")
+} else {
+  # Sort or group by variable, if you like
+  summary_freq_df <- summary_freq_df[order(summary_freq_df$Variable), ]
+
+  kable(
+    summary_freq_df, 
+    format = "html", 
+    caption = "Summary Statistics (Frequencies)"
+  ) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed"), 
+      full_width = FALSE
+    )
+}
+
+####################################
+# 5) "vax_age_table": vacc_status x age_group
+####################################
+####################################
+# Vaccination Status x Age Group (fixed)
+####################################
+
+if ("vacc_status" %in% names(measles_data) && "age_group" %in% names(measles_data)) {
+  cat("\n## Vaccination Status by Age Group\n\n")
+  
+  cross_tab <- table(
+    measles_data$vacc_status,
+    measles_data$age_group,
+    useNA = "ifany"
+  )
+  
+  # Convert the 2D table to a data frame
+  cross_df <- as.data.frame.table(
+    cross_tab,
+    responseName = "Count",
+    stringsAsFactors = FALSE
+  )
+  # By default, it creates columns: Var1, Var2, Count
+  
+  # Rename for clarity
+  colnames(cross_df) <- c("vacc_status", "age_group", "Count")
+  
+  # Use kable to display
+  library(knitr)
+  library(kableExtra)
+  
+  kable(
+    cross_df,
+    format = "html",
+    caption = "Cross-Tab: vacc_status vs. age_group"
+  ) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed"),
+      full_width = FALSE
+    )
+
+} else {
+  cat("\n(No vacc_status x age_group cross-tab, columns not found.)\n")
+}
+
+
+# ----------------------------------------------------------------------------
+# (3) Show minimal summary stats at the top
+# ----------------------------------------------------------------------------
+
+cat("### Basic Summary Stats\n\n")
+
+# Basic numeric summary of 'age'
+if("age" %in% names(measles_data)) {
+  age_vec <- measles_data$age
+  cat("Number of records:", nrow(measles_data), "\n\n")
+  cat("Min Age:", min(age_vec, na.rm=TRUE), "\n")
+  cat("Mean Age:", round(mean(age_vec, na.rm=TRUE),1), "\n")
+  cat("Median Age:", median(age_vec, na.rm=TRUE), "\n")
+  cat("Max Age:", max(age_vec, na.rm=TRUE), "\n")
+  cat("NA in Age:", sum(is.na(age_vec)), "\n\n")
+}
+
+# Summarize vaccination
+if("vacc_status" %in% names(measles_data)) {
+  cat("Vaccination Status:\n")
+  print(table(measles_data$vacc_status, useNA="ifany"))
+  cat("\n")
+}
+
+if (("vacc_status" %in% names(measles_data)) && ("age_group" %in% names(measles_data))) {
+  cat("Vaccination Status by Age Group:\n")
+  print(table(measles_data$vacc_status, measles_data$age_group, useNA = "ifany"))
+  cat("\n")
+}
+
+
+# Summarize vaccination by Gender
+#cat("Vaccination x Age Group:\n")
+   # print(vax_age_table)
+
+# Summarize outbreak related
+if("outbreak_related" %in% names(measles_data)) {
+  cat("Outbreak related?\n")
+  print(table(measles_data$outbreak_related, useNA="ifany"))
+  cat("\n")
+}
+
+# Summarize recent travel
+if("recent_travel" %in% names(measles_data)) {
+  cat("Recent travel (21d)?\n")
+  print(table(measles_data$recent_travel, useNA="ifany"))
+  cat("\n")
+}
+
+
+#############################
+# Minimal Summary Statistics
+#############################
+
+# Example columns to summarize as frequency tables
+summary_cols <- c("final_status", "known_contact", "contact_location_type")
+
+# Print frequency tables for each
+for(col_name in summary_cols) {
+  if(col_name %in% names(measles_data)) {
+    cat("\n## Frequency for", col_name, "\n")
+    print(table(measles_data[[col_name]], useNA = "ifany"))
+  }
+}
+
+# If you also want a numeric summary for numeric columns:
+num_cols <- c("age")
+num_summary <- data.frame()
+
+for(nc in num_cols) {
+  if(nc %in% names(measles_data)) {
+    x <- measles_data[[nc]]
+    row <- data.frame(
+      Column = nc,
+      Min    = min(x, na.rm=TRUE),
+      Q1     = quantile(x, 0.25, na.rm=TRUE),
+      Median = median(x, na.rm=TRUE),
+      Mean   = round(mean(x, na.rm=TRUE),1),
+      Q3     = quantile(x, 0.75, na.rm=TRUE),
+      Max    = max(x, na.rm=TRUE),
+      NAs    = sum(is.na(x))
+    )
+    num_summary <- rbind(num_summary, row)
+  }
+}
+
+if(nrow(num_summary) > 0) {
+  cat("\n## Numeric Summary:\n")
+  # Minimal theme with kable
+  knitr::kable(num_summary, caption="Basic Numeric Summary") 
+}
+
+
+
+#############################
+# Contacts & Exposure Table
+#############################
+
+# Suppose these are the columns we want to see in a single view:
+contacts_cols <- c(
+  "case_id", "nedss_id", "final_status", "known_contact", "contact_location_type", "contact_location_name",
+  "contact_dates", "contact_details", "source_case_id",
+  "exposure_period_table", "infectious_period_table",
+  "household_contacts_table"
+)
+
+# Subset the data (skip columns that don't exist)
+contacts_df <- measles_data[, intersect(contacts_cols, names(measles_data))]
+
+# Display in a wide table
+library(knitr)
+library(kableExtra)
+
+kable(contacts_df, format="html", caption="Contacts, Exposure & Household Info by Case") %>%
+  kable_styling(bootstrap_options=c("striped","hover","condensed"),
+                full_width=FALSE)
+
+
+# ----------------------------------------------------------------------------
+# (4) Epidemic Curve
+# We use the 'onset_date' or 'rash_onset_date' to create a daily incidence.
+# ----------------------------------------------------------------------------
+
+# 4.1 Filter out rows with a valid date in onset_date
+df_epicurve <- measles_data %>% 
+  filter(!is.na(onset_date))
+
+if(nrow(df_epicurve) == 0) {
+  cat("No valid 'onset_date' for Epi Curve.\n")
+} else {
+  # 4.2 Count daily incidence
+  daily_counts <- df_epicurve %>%
+    group_by(onset_date) %>%
+    summarise(incidence = n(), .groups="drop") %>%
+    arrange(onset_date)
+
+  # 4.3 Quick bar plot with ggplot
+  p_epi <- ggplot(daily_counts, aes(x=onset_date, y=incidence)) +
+    geom_col(fill="steelblue", alpha=0.7) +
+    labs(
+      title = "Epidemic Curve by Onset Date",
+      x = "Onset Date",
+      y = "Number of Cases"
+    ) +
+    theme_minimal()
+
+ # print(p_epi)
+
+  # 4.4 Interactive with plotly
+  plotly::ggplotly(p_epi)
+}
+
+
+# ----------------------------------------------------------------------------
+# (5) Gantt Chart for the contagious period
+#    We'll assume 'rash_onset_date' ± 4 days
+# ----------------------------------------------------------------------------
+
+df_gantt <- measles_data %>%
+  filter(!is.na(rash_onset_date)) %>%
+  mutate(
+    contagious_start = rash_onset_date - 4,
+    contagious_end   = rash_onset_date + 4
+  )
+
+if(nrow(df_gantt) == 0) {
+  cat("No valid 'rash_onset_date' for Gantt chart.\n")
+} else {
+  # Sort by earliest start
+  df_gantt <- df_gantt %>% arrange(contagious_start)
+  
+  # Basic Gantt chart
+  p_gantt <- ggplot(df_gantt, aes(y=case_id)) +
+    geom_segment(aes(x=contagious_start, xend=contagious_end,
+                     y=case_id, yend=case_id),
+                 linewidth=4, alpha=0.7, color="blue") +
+    labs(
+      title = "Contagious Period (±4 days from Rash Onset)",
+      x = "Date",
+      y = "Case ID"
+    ) +
+    theme_minimal()
+  
+  #print(p_gantt)
+  # Interactive
+ ggplotly(p_gantt)
+}
+
+
+# ----------------------------------------------------------------------------
+# (6) R(t) using EpiEstim
+# ----------------------------------------------------------------------------
+
+# 6.1 Must have daily incidence, so reuse daily_counts from the Epi curve chunk.
+df_rt <- measles_data %>% 
+  filter(!is.na(onset_date)) %>%
+  group_by(onset_date) %>%
+  summarise(incidence = n(), .groups="drop") %>%
+  arrange(onset_date)
+
+if(nrow(df_rt) < 8) {
+  cat("Not enough data to estimate R(t). Need >= 8 days.\n")
+} else {
+  I <- df_rt$incidence
+  # Time windows
+  t_start <- seq(2, length(I) - 7)
+  t_end   <- t_start + 7
+
+  mean_si <- 12
+  std_si  <- 3
+
+  res_R <- estimate_R(
+    incid = I,
+    method = "parametric_si",
+    config = make_config(
+      mean_si = mean_si,
+      std_si  = std_si,
+      t_start = t_start,
+      t_end   = t_end
+    )
+  )
+
+  # Build a data frame for plotting
+  df_R <- data.frame(
+    t_start = res_R$R$t_start,
+    t_end   = res_R$R$t_end,
+    meanR   = res_R$R$`Mean(R)`,
+    lower   = res_R$R$`Quantile.0.025(R)`,
+    upper   = res_R$R$`Quantile.0.975(R)`
+  )
+
+  # Convert day indices to dates
+  # Earliest onset date
+  min_date <- min(df_rt$onset_date)
+  # Create a date vector
+  date_seq <- seq(from=min_date, by="days", length.out=length(I))
+
+  df_R$mid_date <- date_seq[df_R$t_end]
+
+  p_R <- ggplot(df_R, aes(x=mid_date, y=meanR)) +
+    geom_line() +
+    geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.2) +
+    geom_hline(yintercept=1, linetype="dashed", color="red") +
+    labs(
+      title="Time-varying R(t) (Measles)",
+      x="Date",
+      y="R(t)"
+    ) +
+    theme_minimal()
+  
+ # print(p_R)
+  ggplotly(p_R)
+}
+
+
+# ----------------------------------------------------------------------------
+# (7) Basic Projection Scenarios with "projections"
+# ----------------------------------------------------------------------------
+
+# Reuse daily_counts from above (df_rt)
+if(nrow(df_rt) < 1){
+  cat("Not enough data to run projections.\n")
+} else {
+  # 7.1 Create an incidence object with 'incidence' package
+  incid_obj <- incidence::incidence(
+    dates = rep(df_rt$onset_date, df_rt$incidence),
+    interval=1
+  )
+
+  # 7.2 Define a gamma distribution for generation time
+  #     Example: mean=12, sd=3
+  gen_time <- distcrete(
+    "gamma",
+    shape = (12^2)/(3^2),   # shape = mean^2/sd^2
+    rate  = 12/(3^2),       # rate = mean / sd^2
+    w=0,
+    interval=1
+  )
+
+  # 7.3 Single-scenario example (R=1.2, 14-day projection, 100 sims)
+  proj_res <- projections::project(
+    x     = incid_obj,
+    R     = 1.2,
+    si    = gen_time,
+    n_sim = 100,
+    n_days= 14
+  )
+  
+  # Summarize
+  summ_proj <- summary(proj_res)
+  head(summ_proj)
+
+  # Plot
+  p_proj <- plot(proj_res) +
+    labs(
+      title="Measles 14-Day Projection (R=1.2)",
+      x="Date",
+      y="Predicted Incidence"
+    )
+ # print(p_proj)
+  ggplotly(p_proj)
+
+  # 7.4 Multi-scenario approach
+  #    R values
+  R_scenarios <- c(1.0, 1.2, 1.4)
+  scenario_out <- list()
+  
+  for(rval in R_scenarios){
+    tmp_proj <- project(incid_obj, R=rval, si=gen_time, n_sim=100, n_days=14)
+    scenario_out[[as.character(rval)]] <- tmp_proj
+  }
+
+  # Summarize all
+  scenario_summ <- list()
+  for(rval in names(scenario_out)){
+    tmp <- summary(scenario_out[[rval]])
+    tmp$scenario <- rval
+    scenario_summ[[rval]] <- tmp
+  }
+  all_scen <- do.call(rbind, scenario_summ)
+
+  # Quick combined plot
+  library(ggplot2)
+  p_scen <- ggplot(all_scen, aes(x=dates, group=scenario)) +
+    geom_ribbon(aes(ymin=min, ymax=max, fill=scenario), alpha=0.2) +
+    geom_line(aes(y=`quantiles.50%`, color=scenario), size=1) +
+    labs(
+      title="Measles 14-Day Projection - Scenarios",
+      x="Date",
+      y="Predicted Incidence"
+    ) +
+    theme_minimal()
+  
+  # print(p_scen)
+  ggplotly(p_scen)
+}
+```
